@@ -1,3 +1,195 @@
+# ATELIER API-DRIVEN INFRASTRUCTURE
+
+Orchestration de services AWS via API Gateway et Lambda dans un environnement émulé avec LocalStack.
+
+Ce projet permet de piloter une instance EC2 (démarrage, arrêt, statut) via de simples requêtes HTTP, grâce à une architecture **API Gateway → Lambda → EC2**, le tout simulé dans **LocalStack** et exécuté dans **GitHub Codespaces**.
+
+---
+
+## Architecture
+
+```
+Utilisateur (curl / navigateur)
+        │
+        ▼
+   API Gateway (GET /ec2)
+        │
+        ▼
+   Lambda (ec2-manager)
+        │
+        ▼
+   EC2 (start / stop / status)
+```
+
+Une requête HTTP `GET` est envoyée à l'API Gateway avec deux paramètres :
+- `action` : `start`, `stop` ou `status`
+- `instance_id` : l'identifiant de l'instance EC2
+
+L'API Gateway transmet la requête à une fonction Lambda Python qui appelle l'API EC2 de LocalStack pour exécuter l'action demandée.
+
+---
+
+## Prérequis
+
+- Un compte **GitHub** avec accès à **GitHub Codespaces**
+- Un compte **LocalStack** avec un **Auth Token** (gratuit sur [app.localstack.cloud](https://app.localstack.cloud))
+- Aucune installation locale nécessaire, tout se fait dans le Codespace
+
+---
+
+## Structure du projet
+
+```
+API_Driven/
+├── lambda/
+│   └── handler.py          # Fonction Lambda Python (start/stop/status EC2)
+├── scripts/
+│   └── setup.sh            # Script de déploiement automatisé
+├── Makefile                 # Commandes d'automatisation
+├── .gitignore               # Exclusion des fichiers générés
+└── README.md                # Ce fichier
+```
+
+---
+
+## Guide d'installation
+
+### Étape 1 — Créer le Codespace
+
+1. Rendez-vous sur votre fork du repository **API_Driven** sur GitHub
+2. Cliquez sur **Code** → **Codespaces** → **Create codespace on main**
+3. Attendez que l'environnement se charge
+
+### Étape 2 — Récupérer votre token LocalStack
+
+1. Créez un compte sur [app.localstack.cloud](https://app.localstack.cloud) si ce n'est pas déjà fait
+2. Rendez-vous dans **Account** → **Auth Tokens**
+3. Copiez votre token (il ressemble à `ls-xxxxxxxxxx`)
+
+### Étape 3 — Premier setup
+
+Dans le terminal du Codespace, lancez :
+
+```bash
+make first-setup
+```
+
+Cette commande va :
+- Installer toutes les dépendances (LocalStack, AWS CLI, boto3)
+- Vous demander votre **token LocalStack** (collez-le quand le prompt apparaît)
+- Démarrer LocalStack en arrière-plan
+- Vérifier que les services AWS sont disponibles
+
+### Étape 4 — Déployer l'infrastructure
+
+```bash
+make deploy
+```
+
+Le script crée automatiquement :
+1. Un **AMI** enregistré dans LocalStack
+2. Une **instance EC2** basée sur cet AMI
+3. Un **rôle IAM** pour la Lambda
+4. Une **fonction Lambda** Python qui pilote l'EC2
+5. Une **API Gateway** avec une route `GET /ec2`
+
+À la fin du déploiement, les **3 URLs** sont affichées dans le terminal.
+
+### Étape 5 — Rendre le port public (important pour Codespaces)
+
+1. Dans le Codespace, cliquez sur l'onglet **PORTS** en bas
+2. Trouvez le port **4566**
+3. Clic droit → **Port Visibility** → **Public**
+4. L'URL publique suit le format : `https://<CODESPACE_NAME>-4566.app.github.dev`
+
+---
+
+## Utilisation
+
+### Avec curl (localhost)
+
+```bash
+# Vérifier le statut de l'instance
+curl "http://localhost:4566/restapis/<API_ID>/dev/_user_request_/ec2?action=status&instance_id=<INSTANCE_ID>"
+
+# Stopper l'instance
+curl "http://localhost:4566/restapis/<API_ID>/dev/_user_request_/ec2?action=stop&instance_id=<INSTANCE_ID>"
+
+# Démarrer l'instance
+curl "http://localhost:4566/restapis/<API_ID>/dev/_user_request_/ec2?action=start&instance_id=<INSTANCE_ID>"
+```
+
+### Avec le navigateur (URL publique Codespace)
+
+Remplacez `http://localhost:4566` par l'URL publique de votre port 4566 :
+
+```
+https://<CODESPACE_NAME>-4566.app.github.dev/restapis/<API_ID>/dev/_user_request_/ec2?action=status&instance_id=<INSTANCE_ID>
+```
+
+### Réponses attendues
+
+```json
+{"message": "Instance i-xxxxxxxxxxxx is running"}
+{"message": "Instance i-xxxxxxxxxxxx stopped"}
+{"message": "Instance i-xxxxxxxxxxxx started"}
+```
+
+---
+
+## Commandes Makefile
+
+| Commande | Description |
+|----------|-------------|
+| `make first-setup` | Installation complète (dépendances + LocalStack). Demande le token LocalStack. |
+| `make setup` | Redémarrer LocalStack uniquement (si déjà installé). Demande le token. |
+| `make deploy` | Déployer l'infrastructure (EC2 + Lambda + API Gateway). |
+| `make clean` | Arrêter LocalStack et supprimer les fichiers temporaires. |
+| `make redeploy` | Clean + restart LocalStack + redéploiement complet. |
+
+---
+
+## Détails techniques
+
+### Lambda (`handler.py`)
+
+La fonction Lambda reçoit l'événement HTTP via API Gateway (intégration `AWS_PROXY`), extrait les paramètres `action` et `instance_id` du querystring, puis appelle le service EC2 de LocalStack via boto3.
+
+Point technique important : la Lambda s'exécute dans un container Docker séparé au sein de LocalStack. Pour communiquer avec l'API EC2, elle utilise l'IP du réseau Docker interne (`172.17.0.2`) et non `localhost`, qui pointerait vers le container de la Lambda lui-même.
+
+### API Gateway
+
+L'API est configurée en mode REST avec une seule ressource `/ec2` et une méthode `GET`. L'intégration avec la Lambda est de type `AWS_PROXY`, ce qui signifie que la requête HTTP complète est transmise à la Lambda et que la réponse de la Lambda est directement renvoyée au client.
+
+### LocalStack
+
+LocalStack émule les services AWS en local. Les services utilisés sont : EC2, Lambda, IAM et API Gateway. Le token d'authentification est nécessaire pour activer les fonctionnalités avancées (notamment le support complet d'EC2).
+
+---
+
+## Dépannage
+
+**`awslocal` ne fonctionne pas (`No such file or directory: aws`)**
+→ Installer le CLI AWS : `pip install awscli --break-system-packages`
+
+**La Lambda retourne `ResourceConflictException: Pending`**
+→ La Lambda n'a pas fini de s'initialiser. Attendre quelques secondes et réessayer.
+
+**La Lambda retourne `Could not connect to the endpoint URL`**
+→ Problème de réseau Docker. Vérifier que `handler.py` utilise `172.17.0.2` et non `localhost` pour l'endpoint.
+
+**`InvalidAMI.ID.NotFound`**
+→ Utiliser `awslocal ec2 register-image` pour créer un AMI valide avant de lancer une instance.
+
+---
+
+## Autrice
+
+Réalisé par Agathe dans le cadre de l'atelier API-Driven Infrastructure, présenté — EPSI 2026.
+
+---
+Cours présenté par M. STOCKER, dont voici l'énoncé initial :
+---
 ------------------------------------------------------------------------------------------------------
 ATELIER API-DRIVEN INFRASTRUCTURE
 ------------------------------------------------------------------------------------------------------

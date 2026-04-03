@@ -21,6 +21,7 @@ first-setup:
 	echo "Attente du démarrage (15s)..."; \
 	sleep 15; \
 	localstack status services
+	@echo "/!\ Si erreur, ou simplement pour la suite, dans l'onglet 'PORTS' (à droite de l'onglet 'TERMINAL') pensez à bien mettre le port 4566 en Public !"
 
 ## Démarrer LocalStack (si déjà installé)
 setup:
